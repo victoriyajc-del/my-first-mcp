@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Project Timer</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/toastify-js/src/toastify.min.css">
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #f5f5f5;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .card {
+      background: white;
+      border-radius: 12px;
+      padding: 40px;
+      width: 100%;
+      max-width: 420px;
+      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08);
+    }
+
+    h1 {
+      font-size: 20px;
+      font-weight: 600;
+      color: #111;
+      margin-bottom: 24px;
+    }
+
+    input {
+      width: 100%;
+      padding: 12px 14px;
+      font-size: 15px;
+      border: 1.5px solid #ddd;
+      border-radius: 8px;
+      outline: none;
+      margin-bottom: 16px;
+      transition: border-color 0.2s;
+    }
+
+    input:focus {
+      border-color: #555;
+    }
+
+    .buttons {
+      display: flex;
+      gap: 10px;
+    }
+
+    button {
+      flex: 1;
+      padding: 12px;
+      font-size: 14px;
+      font-weight: 500;
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+      transition: opacity 0.2s;
+    }
+
+    button:hover {
+      opacity: 0.85;
+    }
+
+    #btn-start {
+      background: #2e7d32;
+      color: white;
+    }
+
+    #btn-stop {
+      background: #1565c0;
+      color: white;
+    }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>Project Timer</h1>
+    <input id="task-name" type="text" placeholder="Task name..." />
+    <div class="buttons">
+      <button id="btn-start">Start Timer</button>
+      <button id="btn-stop">Stop Timer</button>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/toastify-js"></script>
+  <script src="./app.js"></script>
+</body>
+</html>

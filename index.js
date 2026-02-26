@@ -1,78 +1,81 @@
-// ============================================================
-// MY FIRST MCP SERVER — Project Timer
-// ============================================================
-// An MCP (Model Context Protocol) server exposes "tools" that
-// Claude can call. This server has one tool: "project_timer".
-// It lets you start and stop a timer for any named task, so
-// you can track how long you spend on design work, client
-// calls, writing, etc.
-// ============================================================
-
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { readFileSync, writeFileSync, existsSync } from "fs";
-import { join, dirname } from "path";
+import fs from "fs";
+import http from "http";
+import path from "path";
 import { fileURLToPath } from "url";
 
-// __dirname isn't available in ES modules — this recreates it
-const __dirname = dirname(fileURLToPath(import.meta.url));
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const TIMERS_FILE = path.join(__dirname, "timers.json");
 
 // ------------------------------------------------------------
-// FILE-BASED TIMER STORAGE
+// FILE PERSISTENCE
 // ------------------------------------------------------------
-// Instead of keeping timers in memory (which resets on every
-// restart), we read/write a JSON file called timers.json in
-// the same folder as index.js.
-//
-// The file looks like this:
-// {
-//   "Sunny Side Cafe hero image": 1708123456789,
-//   "Client call prep": 1708123500000
-// }
-//
-// loadTimers() reads it fresh from disk on every tool call.
-// saveTimers() writes the updated data back to disk.
-// ------------------------------------------------------------
-const TIMERS_FILE = join(__dirname, "timers.json");
-
 function loadTimers() {
-  // If the file doesn't exist yet, return an empty object
-  if (!existsSync(TIMERS_FILE)) return {};
-  return JSON.parse(readFileSync(TIMERS_FILE, "utf8"));
+  try {
+    return JSON.parse(fs.readFileSync(TIMERS_FILE, "utf-8"));
+  } catch {
+    return {};
+  }
 }
 
 function saveTimers(timers) {
-  // null, 2 = pretty-print with 2-space indent (easy to read)
-  writeFileSync(TIMERS_FILE, JSON.stringify(timers, null, 2));
+  fs.writeFileSync(TIMERS_FILE, JSON.stringify(timers, null, 2));
 }
 
 // ------------------------------------------------------------
-// HELPER: Format milliseconds into a human-friendly string
+// ELAPSED TIME FORMATTER
 // ------------------------------------------------------------
-// Example: 3_750_000 ms → "1 hour, 2 minutes, 30 seconds"
-// ------------------------------------------------------------
-function formatDuration(ms) {
+function formatElapsed(ms) {
   const totalSeconds = Math.floor(ms / 1000);
   const hours = Math.floor(totalSeconds / 3600);
   const minutes = Math.floor((totalSeconds % 3600) / 60);
   const seconds = totalSeconds % 60;
 
   const parts = [];
-  if (hours > 0)   parts.push(`${hours} hour${hours !== 1 ? "s" : ""}`);
+  if (hours > 0) parts.push(`${hours} hour${hours !== 1 ? "s" : ""}`);
   if (minutes > 0) parts.push(`${minutes} minute${minutes !== 1 ? "s" : ""}`);
-  if (seconds > 0 || parts.length === 0) {
-    parts.push(`${seconds} second${seconds !== 1 ? "s" : ""}`);
-  }
-
+  if (seconds > 0 || parts.length === 0) parts.push(`${seconds} second${seconds !== 1 ? "s" : ""}`);
   return parts.join(", ");
 }
 
 // ------------------------------------------------------------
-// CREATE THE MCP SERVER
+// SSE BROADCAST SERVER (port 3001)
 // ------------------------------------------------------------
-// McpServer is the main class from the SDK. You give it a
-// name and version — these show up when Claude connects.
+const clients = [];
+
+function broadcastEvent(data) {
+  const payload = `data: ${JSON.stringify(data)}\n\n`;
+  clients.forEach((res) => res.write(payload));
+}
+
+http.createServer((req, res) => {
+  if (req.url === "/events") {
+    res.writeHead(200, {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache",
+      "Connection": "keep-alive",
+      "Access-Control-Allow-Origin": "*",
+    });
+    res.write("\n");
+    clients.push(res);
+    req.on("close", () => {
+      const i = clients.indexOf(res);
+      if (i !== -1) clients.splice(i, 1);
+    });
+  } else {
+    res.writeHead(404);
+    res.end();
+  }
+}).listen(3001).on("error", (err) => {
+  if (err.code === "EADDRINUSE") {
+    process.stderr.write("Port 3001 already in use — browser notifications unavailable\n");
+  }
+});
+
+// ------------------------------------------------------------
+// CREATE THE MCP SERVER
 // ------------------------------------------------------------
 const server = new McpServer({
   name: "project-timer",
@@ -82,100 +85,54 @@ const server = new McpServer({
 // ------------------------------------------------------------
 // REGISTER THE TOOL: project_timer
 // ------------------------------------------------------------
-// server.tool() takes three arguments:
-//   1. Tool name   — how Claude identifies it
-//   2. Parameters  — what Claude must pass in (validated with zod)
-//   3. Handler     — the async function that does the actual work
-// ------------------------------------------------------------
 server.tool(
-  // 1. Tool name (Claude will call this by name)
   "project_timer",
-
-  // 2. Parameter schema — z.object() defines what's required
   {
     action: z
       .enum(["start", "stop"])
       .describe('What to do: "start" begins timing, "stop" ends it'),
-
-    taskName: z
-      .string()
-      .min(1)
-      .describe('The name of the task, e.g. "Sunny Side Cafe hero image"'),
+    taskName: z.string().describe("Name of the task to time"),
   },
-
-  // 3. Handler function — runs when Claude calls the tool
   async ({ action, taskName }) => {
+    const timers = loadTimers();
 
-    // ── START ──────────────────────────────────────────────
     if (action === "start") {
-
-      // Record the current time in milliseconds
-      const startTime = Date.now();
-
-      // Load the current timers from disk, add this one, save back
-      const timers = loadTimers();
-      timers[taskName] = startTime;
+      const startTime = new Date().toISOString();
+      timers[taskName] = { startTime };
       saveTimers(timers);
-
-      // Convert to a readable timestamp for the response
-      const startTimestamp = new Date(startTime).toISOString();
-
+      broadcastEvent({ type: "start", taskName });
       return {
         content: [
           {
             type: "text",
-            text: [
-              `Timer started for: "${taskName}"`,
-              `Start time: ${startTimestamp}`,
-              `Call project_timer with action "stop" and the same taskName when you're done.`,
-            ].join("\n"),
+            text: `Timer started for: "${taskName}"\nStart time: ${startTime}`,
           },
         ],
       };
     }
 
-    // ── STOP ───────────────────────────────────────────────
     if (action === "stop") {
-
-      // Load timers from disk and look up this task
-      const timers = loadTimers();
-      const startTime = timers[taskName];
-
-      // If there's no matching start, let Claude know
-      if (startTime === undefined) {
+      const timer = timers[taskName];
+      if (!timer) {
         return {
           content: [
             {
               type: "text",
-              text: `No active timer found for "${taskName}". Did you start one first?`,
+              text: `No timer found for: "${taskName}". Did you start it?`,
             },
           ],
         };
       }
-
-      // Calculate elapsed time
-      const stopTime = Date.now();
-      const elapsedMs = stopTime - startTime;
-      const friendlyDuration = formatDuration(elapsedMs);
-
-      // Clean up — remove the timer from disk so the name can be reused
+      const stopTime = new Date().toISOString();
+      const elapsed = new Date(stopTime) - new Date(timer.startTime);
       delete timers[taskName];
       saveTimers(timers);
-
-      const startTimestamp = new Date(startTime).toISOString();
-      const stopTimestamp  = new Date(stopTime).toISOString();
-
+      broadcastEvent({ type: "stop", taskName, formatted: formatElapsed(elapsed) });
       return {
         content: [
           {
             type: "text",
-            text: [
-              `Timer stopped for: "${taskName}"`,
-              ``,
-              `Start:   ${startTimestamp}`,
-              `Stop:    ${stopTimestamp}`,
-              `Elapsed: ${elapsedMs} ms (${friendlyDuration})`,
-            ].join("\n"),
+            text: `Timer stopped for: "${taskName}"\n\nStart:   ${timer.startTime}\nStop:    ${stopTime}\nElapsed: ${elapsed} ms (${formatElapsed(elapsed)})`,
           },
         ],
       };
@@ -184,11 +141,7 @@ server.tool(
 );
 
 // ------------------------------------------------------------
-// CONNECT THE SERVER VIA STDIO TRANSPORT
-// ------------------------------------------------------------
-// Claude communicates with MCP servers over stdin/stdout.
-// StdioServerTransport handles that piping automatically.
-// The server is now listening and ready for Claude to call it.
+// START THE SERVER
 // ------------------------------------------------------------
 const transport = new StdioServerTransport();
 await server.connect(transport);
